@@ -1,8 +1,9 @@
 ART = 'art-default.jpg'
 ICON = 'icon-default.png'
 REGEX = '%s = new Array\((.+?)\);'
-ZAP_TO_URL = 'http://%s:%s/cgi-bin/zapTo?path=%s&curBouquet=%d&curChannel=%d'
-STREAM_URL = 'http://%s:%s'
+ZAP_TO_URL = 'http://%s:%s/web/zap?sRef=%s'
+CHANNEL_URL = 'http://%s:%s/web/getservices?sRef=%s'
+STREAM_URL = 'http://%s:%s/%s'
 
 ####################################################################################################
 def Start():
@@ -19,78 +20,59 @@ def MainMenu():
 	oc = ObjectContainer(view_group='List', no_cache=True)
 
 	if Prefs['host'] and Prefs['port_web'] and Prefs['port_video']:
-		categories = GetDataList(name='bouquets')
+		url = 'http://%s:%s/web/getservices' % (Prefs['host'], Prefs['port_web'])
+		
+		try:
+			urlHtml = HTML.ElementFromURL(url)
+		
+		except:
+			Log("Couldn't connect to Dreambox.") 
+			return None
+		
+		ServiceReference = urlHtml.xpath("//e2servicereference/text()")
+		ServiceName = urlHtml.xpath("//e2servicename/text()")
 
-		if categories:
-			for bouquet_index, title in enumerate(categories):
-				channels = GetDataList(name='channels\[%d\]' % bouquet_index)
-
-				if channels[0].lower() == 'none':
-					continue
-
+		for item in range(len(ServiceReference)):
 				oc.add(DirectoryObject(
-					key = Callback(Bouquet, title=title, bouquet_index=bouquet_index),
-					title = title
+					key = Callback(BouquetsMenu, sender=ServiceName[item], index=ServiceReference[item], name=ServiceName[item]),
+					title = ServiceName[item]
 				))
-		else:
-			Log("Couldn't connect to host.")
 
 	oc.add(PrefsObject(title='Preferences', thumb=R('icon-prefs.png')))
 
 	return oc
 
-####################################################################################################
-@route('/video/dreambox/bouquet/{bouquet_index}', bouquet_index=int)
-def Bouquet(title, bouquet_index):
+#@route("/bouquets/{sender}/{index}/{name}")
+def BouquetsMenu(sender, index, name):
+	url = CHANNEL_URL % (Prefs['host'], Prefs['port_web'], String.Quote(index))
+	try:
+		urlHtml = HTML.ElementFromURL(url)
+	except:
+		Log("Couldn't get channels.") 
+		return None
+	ChannelReference = urlHtml.xpath("//e2servicereference/text()")
+	ChannelName = urlHtml.xpath("//e2servicename/text()")
+	
+	oc = ObjectContainer(title2=name, view_group='List', no_cache=True)
 
-	oc = ObjectContainer(title2=title, view_group='List', no_cache=True)
-	channels = GetDataList(name='channels\[%d\]' % bouquet_index)
-	channel_refs = GetDataList(name='channelRefs\[%d\]' % bouquet_index)
-
-	for channel_index, title in enumerate(channels):
-		video = CreateVideoClipObject(channel_ref=channel_refs[channel_index], bouquet_index=bouquet_index, channel_index=channel_index, title=title)
-		oc.add(video)
+	for item in range(len(ChannelReference)):
+		oc.add(TvStationMenu(sender=ChannelName[item], channel=ChannelReference[item]))
 
 	return oc
 
 ####################################################################################################
-def GetDataList(name):
-
-	url = 'http://%s:%s/body' % (Prefs['host'], Prefs['port_web'])
-
-	try:
-		body = HTTP.Request(url, cacheTime=30).content
-	except:
-		return None
-
-	list = Regex(REGEX % name, Regex.DOTALL).search(body)
-	if list:
-		list = list.group(1).strip()
-		list = list.strip('"').split('", "')
-
-		return list
-
-	return None
-
-####################################################################################################
-def CreateVideoClipObject(channel_ref, bouquet_index, channel_index, title, thumb=R(ICON), include_oc=False):
+#@route("/tvstation/{sender}/{channel}/{thumb}/{include_oc}")
+def TvStationMenu(sender, channel, thumb=R(ICON), include_oc=False):
 
 	video = VideoClipObject(
-		key = Callback(CreateVideoClipObject, channel_ref=channel_ref, bouquet_index=bouquet_index, channel_index=channel_index, title=title, thumb=thumb, include_oc=True),
-		rating_key = channel_ref,
-		title = title,
+		#url = STREAM_URL % (Prefs['host'], Prefs['port_video'], channel),
+		key = Callback(TvStationMenu, sender=sender, channel=channel, thumb=thumb, include_oc=True),
+		rating_key = channel,
+		title = sender,
 		thumb = thumb,
 		items = [
 			MediaObject(
-				container = 'mpegts',
-				video_codec = VideoCodec.H264,
-				audio_codec = AudioCodec.AAC,
-				audio_channels = 2,
-				parts = [
-					PartObject(
-						key = HTTPLiveStreamURL(Callback(PlayVideo, channel_ref=channel_ref, bouquet_index=bouquet_index, channel_index=channel_index))
-					)
-				]
+				parts = [PartObject(key=HTTPLiveStreamURL(Callback(PlayVideo, channel=channel)))]
 			)
 		]
 	)
@@ -102,13 +84,11 @@ def CreateVideoClipObject(channel_ref, bouquet_index, channel_index, title, thum
 	else:
 		return video
 
+
 ####################################################################################################
-def PlayVideo(channel_ref, bouquet_index, channel_index):
-
-	# Change the channel
-	zap_to = ZAP_TO_URL % (Prefs['host'], Prefs['port_web'], channel_ref, bouquet_index, channel_index)
-	zap = HTTP.Request(zap_to, cacheTime=0, sleep=2.0).content
-
+#@route("/play/{channel}")
+def PlayVideo(channel):
 	# Tune in to the stream
-	stream = STREAM_URL % (Prefs['host'], Prefs['port_video'])
+	stream = STREAM_URL % (Prefs['host'], Prefs['port_video'], channel)
+	Log(stream)
 	return Redirect(stream)
